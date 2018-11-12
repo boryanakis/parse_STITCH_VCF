@@ -79,7 +79,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '-v', '--inVCF',
+        '-i', '--inVCF',
         required=True,
         help='The input VCF file name including full/relative path')
     parser.add_argument(
@@ -98,11 +98,18 @@ def main():
         '-o', '--outputDir',
         default='',
         help='the name of the output directory')
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='print more information')
     args = parser.parse_args()
 
     logger = logging.getLogger('root')
     FORMAT = "[%(filename)s:%(lineno)4s - %(funcName)20s() ] %(levelname)10s - %(message)s"
     logging.basicConfig(level=logging.WARNING, format=FORMAT)
+
+    if args.verbose:
+        logger.setLevel(logging.INFO)
 
     parentalGenosDict = OrderedDict()
     with openIOFile(args.founders) as parentalGenosInput:
@@ -121,13 +128,17 @@ def main():
         logging.info(f'parents: {parents}')
         parentalGenosDict = extractParentGenosForGivenChrom(parentalGenosInput, args.chrom, parentalGenosHeader)
 
+    logging.info(f"parental genotypes have been stored in memory")
+
     genotypeTranslationDictProper = {'0/0': '0', '0/1': '1', '1/1': '2', './.':'NA'}
     genotypeTranslationDictInv = {'0/0': '2', '0/1': '1', '1/1': '0', './.':'NA'}
 
+    logging.info(f"opening the input VCF file...")
     vcfFileInput = openIOFile(args.inVCF)
     vcf_reader = vcf.Reader(vcfFileInput)
 
     nSamples = len(vcf_reader.samples)
+    logging.info(f"calculated number of samples: [{nSamples}]")
 
     # prepare the data structures for the output file
     outputHeader = ['sample']
@@ -137,13 +148,19 @@ def main():
     for sample in vcf_reader.samples:
         outputGenosDict[sample] = []
 
+    logging.info(f"iterating through the VCF records")
+
+    i = 0
     for record in vcf_reader:
+        i += 1
+        if i % 10000 == 0:
+            logging.info(f"processing record # {i}")
         # print(record.CHROM, record.POS, record.num_called, record.num_unknown)
 
         # ensure that the current VCF position is in the parental genotypes table
         try:
             assert str(record.POS) in parentalGenosDict.keys()
-            logging.info(f'found {record.POS}')
+            logging.debug(f'found {record.POS}')
         except AssertionError:
             message = f'position {record.POS} was not found in the founding SNPs'
             logging.warning(message)
