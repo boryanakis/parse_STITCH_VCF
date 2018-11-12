@@ -34,13 +34,13 @@ def extractParentGenosForGivenChrom(openedFile, chrom, header):
     genoDict = OrderedDict()
     for line in openedFile:
         elements = line.strip().split()
-        logging.info(elements)
+        logging.debug(elements)
         if elements[0] == chrom:
             tempDict = OrderedDict(zip(header, elements))
-            logging.info(f'\n{pprint.pformat(tempDict)}\n')
+            logging.debug(f'{tempDict}')
 
             genoDict[tempDict['POS']] = {k:tempDict[k] for k in header[2:]}
-    logging.debug(f'\n{pprint.pformat(genoDict)}\n')
+    logging.debug(f'\n{pprint.pformat(genoDict)}')
 
     try:
         assert len(genoDict.items()) > 0
@@ -50,6 +50,26 @@ def extractParentGenosForGivenChrom(openedFile, chrom, header):
         sys.exit(message)
 
     return genoDict
+
+def verifyOutputGenoIntegrity(genosDict, samples):
+
+    nPos = len(genosDict['positions'])
+    nBad = 0
+    for sample in samples:
+        try:
+            assert len(genosDict[sample]) == nPos
+        except AssertionError:
+            nBad += 1
+            message = f'sample [{sample}] has [{len(genosDict[sample])}] genos. Expected: [{nPos}]'
+            logging.warning(message)
+
+    if nBad == 0:
+        result = True
+    else:
+        result = False
+
+    return result
+
 
 def main():
     """
@@ -81,8 +101,8 @@ def main():
     args = parser.parse_args()
 
     logger = logging.getLogger('root')
-    FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(levelname)s - %(message)s"
-    logging.basicConfig(level=logging.INFO, format=FORMAT)
+    FORMAT = "[%(filename)s:%(lineno)4s - %(funcName)20s() ] %(levelname)10s - %(message)s"
+    logging.basicConfig(level=logging.DEBUG, format=FORMAT)
 
     parentalGenosDict = OrderedDict()
     with openIOFile(args.founders) as parentalGenosInput:
@@ -101,62 +121,92 @@ def main():
         logging.info(f'parents: {parents}')
         parentalGenosDict = extractParentGenosForGivenChrom(parentalGenosInput, args.chrom, parentalGenosHeader)
 
-
+    genotypeTranslationDictProper = {'0/0': '0', '0/1': '1', '1/1': '2', './.':'NA'}
+    genotypeTranslationDictInv = {'0/0': '2', '0/1': '1', '1/1': '0', './.':'NA'}
 
     vcfFileInput = openIOFile(args.inVCF)
     vcf_reader = vcf.Reader(vcfFileInput)
 
-    sample_names = vcf_reader.samples
+    nSamples = len(vcf_reader.samples)
 
-    # outputFN = f'{args.prefix}.{args.chrom}.genos.tsv'
-    # outputFile = openIOFile(outputFN, args.outputDir, 'w')
-    # outputLine = '\t'.join(map(str, header))
+    # prepare the data structures for the output file
+    outputHeader = ['sample']
 
+    outputGenosDict = OrderedDict()
+    outputGenosDict['positions'] = []
+    for sample in vcf_reader.samples:
+        outputGenosDict[sample] = []
 
     for record in vcf_reader:
         # print(record.CHROM, record.POS, record.num_called, record.num_unknown)
 
-        # try:
-        #     assert parentalGenosDict[record.POS]['REF'] == record.REF
-        # except AssertionError:
-        #     message = f'REF alleles for position {record.POS} don\'t match in founding SNPs and STITCH VCF'
-        #     logging.warning(message)
-        #     sys.exit(message)
-
+        # ensure that the current VCF position is in the parental genotypes table
         try:
-            assert record.POS in parentalGenosDict.keys()
+            assert str(record.POS) in parentalGenosDict.keys()
             logging.info(f'found {record.POS}')
         except AssertionError:
             message = f'position {record.POS} was not found in the founding SNPs'
             logging.warning(message)
             continue
 
+        # check whether the REF allele matches between the VCF and the parental genos table
         try:
-            assert parentalGenosDict[record.POS]['REF'] == record.REF
+            assert parentalGenosDict[str(record.POS)]['REF'] == record.REF
         except AssertionError:
             message = f'REF alleles for position {record.POS} don\'t match in founding SNPs and STITCH VCF'
             logging.critical(message)
             sys.exit(message)
 
+        # check whether the ALT allele matches between the VCF and the parental genos table
         try:
-            assert parentalGenosDict[record.POS]['ALT'] == record.ALT[0]
+            assert parentalGenosDict[str(record.POS)]['ALT'] == record.ALT[0]
         except AssertionError:
             message = f'ALT alleles for position {record.POS} don\'t match in founding SNPs and STITCH VCF'
             logging.critical(message)
             sys.exit(message)
 
+        # determine which translation dictionary will be used
+        if parentalGenosDict[str(record.POS)][parents[0]] == '0/0' and parentalGenosDict[str(record.POS)][parents[1]] == '1/1':
+            translateGeno = genotypeTranslationDictProper.copy()
+        elif parentalGenosDict[str(record.POS)][parents[0]] == '1/1' and parentalGenosDict[str(record.POS)][parents[1]] == '0/0':
+            translateGeno = genotypeTranslationDictInv.copy()
+        else:
+            message = f'An unexpected genotype combination was encountered in the parents at position [{record.POS}]'
+            logging.warn(message)
+            warnings.warn(message, Warning)
+            continue
+
+        outputGenosDict['positions'].append(str(record.POS))
+        # iterate through the samples in the VCF
+        # re-code genos as 0, 1, or 2
+        for sample in vcf_reader.samples:
+            trGeno = translateGeno[record.genotype(sample)['GT']]
+            outputGenosDict[sample].append(trGeno)
+
+    logging.debug(pprint.pformat(outputGenosDict))
+
+
+    try:
+        assert verifyOutputGenoIntegrity(outputGenosDict, vcf_reader.samples)
+    except AssertionError:
+        message = f'the output genotype dictionary is not correct'
+        logging.critical(message)
+        sys.exit(message)
+
+    outputFN = f'{args.prefix}.{args.chrom}.genos.tsv'
+    outputFile = openIOFile(outputFN, args.outputDir, 'w')
+    outputHeader += outputGenosDict['positions']
+    outputFile.write(','.join(map(str, outputHeader)) + '\n')
+
+    for sample in vcf_reader.samples:
+        outputLine = [sample] + outputGenosDict[sample]
+        outputFile.write(','.join(map(str, outputLine)) + '\n')
 
 
 
-        # parent1_geno = record.genotype(sample_names[0])['GT']
-        # parent2_geno = record.genotype(sample_names[1])['GT']
-        #
-        # lenALT = len(record.ALT)
-        #
-        # if (parent1_geno != parent2_geno) and lenALT == 1 and record.num_unknown == 0:
-        #     outputInfo = [record.CHROM, record.POS, record.REF, record.ALT[0], parent1_geno, parent2_geno]
-        #     outputLine = '\t'.join(map(str, outputInfo))
-        #     outputFile.write(outputLine+'\n')
+
+
+
 
 if __name__ == "__main__":
     main()
