@@ -109,7 +109,7 @@ def main():
     logging.basicConfig(level=logging.WARNING, format=FORMAT)
 
     if args.verbose:
-        logger.setLevel(logging.INFO)
+        logging.basicConfig(level=logging.INFO, format=FORMAT)
 
     parentalGenosDict = OrderedDict()
     with openIOFile(args.founders) as parentalGenosInput:
