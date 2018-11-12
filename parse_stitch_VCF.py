@@ -106,10 +106,11 @@ def main():
 
     logger = logging.getLogger('root')
     FORMAT = "[%(filename)s:%(lineno)4s - %(funcName)20s() ] %(levelname)10s - %(message)s"
-    logging.basicConfig(level=logging.WARNING, format=FORMAT)
 
     if args.verbose:
         logging.basicConfig(level=logging.INFO, format=FORMAT)
+    else:
+        logging.basicConfig(level=logging.WARNING, format=FORMAT)
 
     parentalGenosDict = OrderedDict()
     with openIOFile(args.founders) as parentalGenosInput:
