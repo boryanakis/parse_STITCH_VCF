@@ -211,7 +211,7 @@ def main():
         logging.critical(message)
         sys.exit(message)
 
-    outputFN = f'{args.prefix}.{args.chrom}.genos.tsv'
+    outputFN = f'{args.prefix}.{args.chrom}.genos.csv'
     outputFile = openIOFile(outputFN, args.outputDir, 'w')
     outputHeader += outputGenosDict['positions']
     outputFile.write(','.join(map(str, outputHeader)) + '\n')
